@@ -1,5 +1,5 @@
 //@version=5
-indicator("5Min Next Candle Predictor [Buy & Sell]", overlay=True, max_labels_count=500, max_lines_count=500)
+indicator("5Min Next Candle Predictor [Buy & Sell]", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ==========================================
 // INPUTS & CONFIGURATION
@@ -126,7 +126,9 @@ var table dash = table.new(table_position, 2, 6, bgcolor=dash_bg_color, border_w
 
 if show_dashboard and barstate.islast
     // Header
-    table.cell(dash, 0, 0, "5M Signal Stats", colspan=2, bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 0, "5M Signal Stats", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, "", bgcolor=color.navy)
+    table.merge_cells(dash, 0, 0, 1, 0)
 
     // Total Signals
     table.cell(dash, 0, 1, "Total Predictions", text_color=dash_txt_color, text_size=size.small)
