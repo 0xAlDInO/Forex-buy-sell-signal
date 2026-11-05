@@ -1,0 +1,166 @@
+//@version=5
+indicator("5Min Next Candle Predictor [Buy & Sell]", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ==========================================
+// INPUTS & CONFIGURATION
+// ==========================================
+grp_time = "Timing Settings"
+trigger_sec = input.int(2, title="Trigger Seconds Before Candle Close", minval=1, maxval=10, group=grp_time, tooltip="In real-time execution, trigger signal N seconds before bar close.")
+
+grp_strat = "Strategy Indicators & Parameters"
+ema_fast_len = input.int(9, title="Fast EMA Length", minval=1, group=grp_strat)
+ema_slow_len = input.int(21, title="Slow EMA Length", minval=1, group=grp_strat)
+rsi_len = input.int(14, title="RSI Length", minval=1, group=grp_strat)
+rsi_ob = input.int(65, title="RSI Overbought Level (Filter Sell)", minval=50, maxval=90, group=grp_strat)
+rsi_os = input.int(35, title="RSI Oversold Level (Filter Buy)", minval=10, maxval=50, group=grp_strat)
+use_pa_filter = input.bool(true, title="Use Price Action / Candle Pattern Confirmation", group=grp_strat, tooltip="Requires previous bar color and momentum to confirm signal direction.")
+
+grp_dash = "Dashboard Settings"
+show_dashboard = input.bool(true, title="Show Statistics Dashboard", group=grp_dash)
+table_pos_input = input.string("Top Right", title="Dashboard Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=grp_dash)
+dash_bg_color = input.color(color.new(color.black, 20), title="Dashboard Background", group=grp_dash)
+dash_txt_color = input.color(color.white, title="Dashboard Text", group=grp_dash)
+
+// ==========================================
+// TECHNICAL INDICATORS CALCULATION
+// ==========================================
+ema_fast = ta.ema(close, ema_fast_len)
+ema_slow = ta.ema(close, ema_slow_len)
+rsi_val = ta.rsi(close, rsi_len)
+
+// Prior candle price action analysis
+is_prev_green = close[1] > open[1]
+is_prev_red = close[1] < open[1]
+prev_body_size = math.abs(close[1] - open[1])
+avg_body_size = ta.sma(math.abs(close - open), 10)
+is_strong_prev_body = prev_body_size > (avg_body_size * 0.5)
+
+// ==========================================
+// SIGNAL PREDICTION LOGIC
+// ==========================================
+// Buy condition: Fast EMA > Slow EMA, RSI not overbought, previous candle was green/bullish confirmation
+raw_buy_condition = (ema_fast > ema_slow) and (rsi_val > 45) and (rsi_val < rsi_ob) and (not use_pa_filter or (is_prev_green and is_strong_prev_body))
+
+// Sell condition: Fast EMA < Slow EMA, RSI not oversold, previous candle was red/bearish confirmation
+raw_sell_condition = (ema_fast < ema_slow) and (rsi_val < 55) and (rsi_val > rsi_os) and (not use_pa_filter or (is_prev_red and is_strong_prev_body))
+
+// Ensure signals are mutually exclusive and avoid back-to-back duplicate signals if desired
+buy_signal_raw = raw_buy_condition and not raw_sell_condition
+sell_signal_raw = raw_sell_condition and not raw_buy_condition
+
+// Real-time timing check: Trigger 2 seconds before bar close
+// In real-time (`barstate.isrealtime`), check if current time is within `trigger_sec` seconds before `time_close`
+time_to_close = (time_close - timenow) / 1000 // remaining seconds
+is_trigger_time = barstate.isrealtime ? (time_to_close <= trigger_sec and time_to_close >= 0) : true
+
+// Final validated signals on bar close / trigger time
+buy_signal = buy_signal_raw and is_trigger_time
+sell_signal = sell_signal_raw and is_trigger_time
+
+// ==========================================
+// STATISTICAL TRACKING & PREDICTION EVALUATION
+// ==========================================
+// We track predictions made on bar [1] relative to actual outcome on bar [0]
+// Since we predict the NEXT bar, bar [0] closing price vs open price determines if the prediction made on bar [1] was correct.
+
+var int total_predictions = 0
+var int win_predictions = 0
+var int loss_predictions = 0
+var string last_signal_type = "NONE"
+var string last_signal_result = "N/A"
+
+// Evaluate prediction made on bar [1] once bar [0] closes or on bar execution
+if barstate.isconfirmed and not barstate.isfirst
+    if buy_signal_raw[1]
+        total_predictions := total_predictions + 1
+        last_signal_type := "BUY"
+        if close > open // Next bar turned out GREEN (Win)
+            win_predictions := win_predictions + 1
+            last_signal_result := "WIN"
+        else if close < open // Next bar turned out RED (Loss)
+            loss_predictions := loss_predictions + 1
+            last_signal_result := "LOSS"
+        else
+            last_signal_result := "DRAW"
+
+    else if sell_signal_raw[1]
+        total_predictions := total_predictions + 1
+        last_signal_type := "SELL"
+        if close < open // Next bar turned out RED (Win)
+            win_predictions := win_predictions + 1
+            last_signal_result := "WIN"
+        else if close > open // Next bar turned out GREEN (Loss)
+            loss_predictions := loss_predictions + 1
+            last_signal_result := "LOSS"
+        else
+            last_signal_result := "DRAW"
+
+win_rate = total_predictions > 0 ? (win_predictions / total_predictions) * 100.0 : 0.0
+
+// ==========================================
+// VISUAL OVERLAYS & PLOTS
+// ==========================================
+// Plot EMAs on chart
+plot(ema_fast, title="Fast EMA", color=color.rgb(33, 150, 243), linewidth=2)
+plot(ema_slow, title="Slow EMA", color=color.rgb(255, 152, 0), linewidth=2)
+
+// Plot Buy and Sell Shapes
+plotshape(buy_signal_raw, title="BUY Signal (Prediction)", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="BUY 5M", textcolor=color.white)
+plotshape(sell_signal_raw, title="SELL Signal (Prediction)", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="SELL 5M", textcolor=color.white)
+
+// Background highlight when real-time 2s trigger occurs
+bgcolor(barstate.isrealtime and is_trigger_time and buy_signal_raw ? color.new(color.green, 85) : na, title="BUY 2s Trigger BG")
+bgcolor(barstate.isrealtime and is_trigger_time and sell_signal_raw ? color.new(color.red, 85) : na, title="SELL 2s Trigger BG")
+
+// ==========================================
+// DASHBOARD TABLE
+// ==========================================
+table_position = switch table_pos_input
+    "Top Right" => position.top_right
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left" => position.bottom_left
+    => position.top_right
+
+var table dash = table.new(table_position, 2, 6, bgcolor=dash_bg_color, border_width=1, border_color=color.gray)
+
+if show_dashboard and barstate.islast
+    // Header
+    table.cell(dash, 0, 0, "5M Signal Stats", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, "", bgcolor=color.navy)
+    table.merge_cells(dash, 0, 0, 1, 0)
+
+    // Total Signals
+    table.cell(dash, 0, 1, "Total Predictions", text_color=dash_txt_color, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(total_predictions), text_color=dash_txt_color, text_size=size.small)
+
+    // Wins / Losses
+    table.cell(dash, 0, 2, "Wins / Losses", text_color=dash_txt_color, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(win_predictions) + " / " + str.tostring(loss_predictions), text_color=dash_txt_color, text_size=size.small)
+
+    // Win Rate
+    color wr_color = win_rate >= 50 ? color.green : color.red
+    table.cell(dash, 0, 3, "Win Rate", text_color=dash_txt_color, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(win_rate, "#.##") + "%", text_color=wr_color, text_size=size.small)
+
+    // Last Signal
+    table.cell(dash, 0, 4, "Last Signal", text_color=dash_txt_color, text_size=size.small)
+    color last_sig_col = last_signal_type == "BUY" ? color.green : (last_signal_type == "SELL" ? color.red : dash_txt_color)
+    table.cell(dash, 1, 4, last_signal_type, text_color=last_sig_col, text_size=size.small)
+
+    // Last Result
+    table.cell(dash, 0, 5, "Last Result", text_color=dash_txt_color, text_size=size.small)
+    color res_color = last_signal_result == "WIN" ? color.green : (last_signal_result == "LOSS" ? color.red : dash_txt_color)
+    table.cell(dash, 1, 5, last_signal_result, text_color=res_color, text_size=size.small)
+
+// ==========================================
+// ALERTS
+// ==========================================
+alertcondition(buy_signal_raw, title="BUY 5M Signal", message="BUY Signal: Predict Next 5M Candle is GREEN/UP")
+alertcondition(sell_signal_raw, title="SELL Signal", message="SELL Signal: Predict Next 5M Candle is RED/DOWN")
+
+if buy_signal
+    alert("BUY 5M Candle Signal (2s before close) - Predict NEXT 5M candle GREEN UP", alert.freq_once_per_bar)
+
+if sell_signal
+    alert("SELL 5M Candle Signal (2s before close) - Predict NEXT 5M candle RED DOWN", alert.freq_once_per_bar)
